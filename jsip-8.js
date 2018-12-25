@@ -1,3 +1,7 @@
+// See screen dimensions: https://raw.githubusercontent.com/wiki/mattmikolay/chip-8/images/screen_diagram.png
+const SCREEN_WIDTH = 0x3f;
+const SCREEN_HEIGHT = 0x1f;
+
 class JSip8 {
   constructor() {
     this.reset();
@@ -26,6 +30,7 @@ class JSip8 {
     this.delayTimer = 0;
     this.soundTimer = 0;
     this.lastCommandRun = new Date().getTime();
+    this.screen = new Array(SCREEN_WIDTH * SCREEN_HEIGHT).fill(0x0);
     console.log("Emulation state reset");
   }
 
@@ -39,6 +44,37 @@ class JSip8 {
       this.lastCommandRun = now;
     }
     requestAnimationFrame(this.run);
+  }
+
+  drawPixel(x, y) {
+    // Sprites are XORed onto the existing screen. If this causes any pixels to be erased, VF is set to 1, otherwise it is set to 0. If the sprite is positioned so part of it is outside the coordinates of the display, it wraps around to the opposite side of the screen.
+
+    // Sprites are always eight pixels wide, with a height ranging from one to fifteen pixels.
+
+    // If the program attempts to draw a sprite at an x coordinate greater than 0x3F, the x value will be reduced modulo 64. Similarly, if the program attempts to draw at a y coordinate greater than 0x1F, the y value will be reduced modulo 32. Sprites that are drawn partially off-screen will be clipped.
+
+    // Sprites are drawn to the screen using the DXYN instruction. All sprites are rendered using an exclusive-or (XOR) mode; when a request to draw a sprite is processed, the given sprite's data is XOR'd with the current graphics data of the screen.
+    if (x > SCREEN_WIDTH) {
+      x -= SCREEN_WIDTH;
+    } else if (x < 0) {
+      x += SCREEN_WIDTH;
+    }
+
+    if (y > SCREEN_HEIGHT) {
+      y -= SCREEN_HEIGHT;
+    } else if (y < 0) {
+      y += SCREEN_HEIGHT;
+    }
+
+    const location = x + y * SCREEN_WIDTH;
+    const hadAlreadyAPixel = this.screen[location];
+    this.screen[location] ^= 1;
+
+    return hadAlreadyAPixel;
+  }
+
+  clearScreen() {
+    this.screen = new Array(0x3f).fill(new Array(0x1f).fill(0x0));
   }
 
   executeDelayTimer() {
@@ -59,17 +95,22 @@ class JSip8 {
 
     switch (opcode & 0xf000) {
       case 0x0000: {
-        /*
-        00E0 - CLS
-        Clear the display.
-
-        00EE - RET
-        Return from a subroutine.
-        The interpreter sets the program counter to the address at the top of the stack, then subtracts 1 from the stack pointer.
-        */
         switch (opcode) {
           case 0x00e0:
-            console.log("clearing screen");
+            /*
+            00E0 - CLS
+            Clear the display.
+            */
+            this.clearScreen();
+            break;
+          case 0x0ee:
+            /*
+            00EE - RET
+            Return from a subroutine.
+            The interpreter sets the program counter to the address at the top of the stack, then subtracts 1 from the stack pointer.
+            */
+            this.pc = this.stack[this.sp];
+            this.sp--;
             break;
         }
         break;
@@ -99,7 +140,7 @@ class JSip8 {
         Skip next instruction if Vx = kk.
         The interpreter compares register Vx to kk, and if they are equal, increments the program counter by 2.
         */
-        const vIndex = (opcode >> 8) & 0xf;
+        const vIndex = (opcode >> 8) & 0x000f;
         if (this.v[vIndex] === (opcode & 0x00ff)) {
           this.pc += 2;
         }
@@ -111,7 +152,7 @@ class JSip8 {
         Skip next instruction if Vx != kk.
         The interpreter compares register Vx to kk, and if they are not equal, increments the program counter by 2.
         */
-        const vIndex = (opcode >> 8) & 0xf;
+        const vIndex = (opcode >> 8) & 0x000f;
         if (this.v[vIndex] !== (opcode & 0x00ff)) {
           this.pc += 2;
         }
@@ -123,8 +164,8 @@ class JSip8 {
         Skip next instruction if Vx = Vy.
         The interpreter compares register Vx to register Vy, and if they are equal, increments the program counter by 2.
         */
-        const vxIndex = (opcode >> 8) & 0xf;
-        const vyIndex = (opcode >> 4) & 0xf;
+        const vxIndex = (opcode >> 8) & 0x000f;
+        const vyIndex = (opcode >> 4) & 0x000f;
         if (this.v[vxIndex] === this.v[vyIndex]) {
           this.pc += 2;
         }
@@ -136,7 +177,7 @@ class JSip8 {
         Set Vx = kk.
         The interpreter puts the value kk into register Vx.
         */
-        const vx = (opcode >> 8) & 0xf;
+        const vx = (opcode >> 8) & 0x000f;
         const kk = opcode & 0x00ff;
         this.v[vx] = kk;
         break;
@@ -147,15 +188,15 @@ class JSip8 {
         Set Vx = Vx + kk.
         Adds the value kk to the value of register Vx, then stores the result in Vx. 
         */
-        const vx = (opcode >> 8) & 0xf;
+        const vx = (opcode >> 8) & 0x000f;
         const kk = opcode & 0xff;
         this.v[vx] = vx + kk;
         break;
       }
       case 0x8000: {
-        const lastByte = opcode & 0xf;
-        const x = (opcode >> 8) & 0xf;
-        const y = (opcode >> 4) & 0xf;
+        const lastByte = opcode & 0x000f;
+        const x = (opcode >> 8) & 0x000f;
+        const y = (opcode >> 4) & 0x000f;
 
         switch (lastByte) {
           case 0x0:
@@ -202,7 +243,7 @@ class JSip8 {
             */
             if (x + y > 255) {
               this.v[0xf] = 1;
-              this.v[x] = (this.v[x] + this.v[y]) & 0xff;
+              this.v[x] = (this.v[x] + this.v[y]) & 0x00ff;
             } else {
               this.v[0xf] = 0;
               this.v[x] = this.v[x] + this.v[y];
@@ -260,7 +301,7 @@ class JSip8 {
             Set Vx = Vx SHL 1.
             If the most-significant bit of Vx is 1, then VF is set to 1, otherwise to 0. Then Vx is multiplied by 2.
             */
-            this.v[0xf] = this.v[x] & 0x80;
+            this.v[0xf] = this.v[x] & 0x80; // WTF
             this.v[x] <<= 1;
             break;
         }
@@ -284,7 +325,7 @@ class JSip8 {
         Set I = nnn.
         The value of register I is set to nnn.
         */
-        this.i = opcode & 0xfff;
+        this.i = opcode & 0x0fff;
         break;
       }
       case 0xb000: {
@@ -293,7 +334,7 @@ class JSip8 {
         Jump to location nnn + V0.
         The program counter is set to nnn plus the value of V0.
         */
-        this.pc = (opcode & 0xfff) + this.v[0];
+        this.pc = (opcode & 0x0fff) + this.v[0];
         break;
       }
       case 0xc000: {
@@ -302,8 +343,8 @@ class JSip8 {
         Set Vx = random byte AND kk.
         The interpreter generates a random number from 0 to 255, which is then ANDed with the value kk. The results are stored in Vx.
         */
-        const kk = opcode & 0xff;
-        const random = Math.floor(Math.random() * 0xff);
+        const kk = opcode & 0x00ff;
+        const random = Math.floor(Math.random() * 0x00ff);
         this.v[x] = random & kk;
         break;
       }
@@ -311,9 +352,21 @@ class JSip8 {
         /*
         Dxyn - DRW Vx, Vy, nibble
         Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision.
-        The interpreter reads n bytes from memory, starting at the address stored in I. These bytes are then displayed as sprites on screen at coordinates (Vx, Vy). Sprites are XORed onto the existing screen. If this causes any pixels to be erased, VF is set to 1, otherwise it is set to 0. If the sprite is positioned so part of it is outside the coordinates of the display, it wraps around to the opposite side of the screen. See instruction 8xy3 for more information on XOR, and section 2.4, Display, for more information on the Chip-8 screen and sprites.
+        The interpreter reads n bytes from memory, starting at the address stored in I. These bytes are then displayed as sprites on screen at coordinates (Vx, Vy). Sprites are XORed onto the existing screen. If this causes any pixels to be erased, VF is set to 1, otherwise it is set to 0. If the sprite is positioned so part of it is outside the coordinates of the display, it wraps around to the opposite side of the screen.
         */
-        console.log("Draw time!");
+
+        const n = opcode & 0x000f;
+
+        for (let y = 0; y < n; y++) {
+          let sprite = this.memory[this.i + y];
+          for (let x = 0; x < 8; x++) {
+            if ((sprite & 0x80) > 0) {
+              this.v[0xf] = this.drawPixel(this.v[x] + x, this.v[y] + y);
+            }
+            sprite <<= 1;
+          }
+        }
+
         break;
       }
       case 0xe000: {
