@@ -2,6 +2,25 @@
 const SCREEN_WIDTH = 0x3f;
 const SCREEN_HEIGHT = 0x1f;
 
+const KEY_MAPPING = {
+  1: 0x0,
+  2: 0x1,
+  3: 0x2,
+  4: 0x3,
+  q: 0x4,
+  w: 0x5,
+  e: 0x6,
+  r: 0x7,
+  a: 0x8,
+  s: 0x9,
+  d: 0xa,
+  f: 0xb,
+  z: 0xc,
+  x: 0xd,
+  c: 0xe,
+  v: 0xf
+};
+
 class JSip8 {
   constructor() {
     this.reset();
@@ -12,6 +31,9 @@ class JSip8 {
     this.executeOpcode = this.executeOpcode.bind(this);
     this.executeDelayTimer = this.executeDelayTimer.bind(this);
     this.executeSoundTimer = this.executeSoundTimer.bind(this);
+    this.setupKeylistener = this.setupKeylistener.bind(this);
+
+    this.setupKeylistener();
   }
 
   load(program) {
@@ -31,16 +53,46 @@ class JSip8 {
     this.soundTimer = 0;
     this.lastCommandRun = new Date().getTime();
     this.screen = new Array(SCREEN_WIDTH * SCREEN_HEIGHT).fill(0x0);
+    this.isWaitingForKey = true;
+    this.keysDown = {};
     console.log("Emulation state reset");
+  }
+
+  setupKeylistener() {
+    document.addEventListener("keydown", e => {
+      e.preventDefault();
+      const keyCode = KEY_MAPPING[e.key];
+      if (keyCode === undefined) {
+        return;
+      }
+      this.keysDown[e.key] = true;
+
+      // All execution stops until a key is pressed, then the value of that key is stored in Vx.
+      if (this.isWaitingForKey) {
+        this.isWaitingForKey = false;
+        this.v[x] = keyCode;
+      }
+    });
+
+    document.addEventListener("keyup", e => {
+      e.preventDefault();
+      const keyCode = KEY_MAPPING[e.key];
+      if (keyCode === undefined) {
+        return;
+      }
+      this.keysDown[e.key] = false;
+    });
   }
 
   run() {
     const now = new Date().getTime();
     if (now - this.lastCommandRun > 1000) {
-      this.executeDelayTimer();
-      this.executeSoundTimer();
-      this.executeOpcode(this.memory[this.pc], this.memory[this.pc + 1]);
-      this.pc += 2;
+      if (this.isWaitingForKey) {
+        this.executeDelayTimer();
+        this.executeSoundTimer();
+        this.executeOpcode(this.memory[this.pc], this.memory[this.pc + 1]);
+        this.pc += 2;
+      }
       this.lastCommandRun = now;
     }
     requestAnimationFrame(this.run);
@@ -370,57 +422,145 @@ class JSip8 {
         break;
       }
       case 0xe000: {
-        /*
-        Ex9E - SKP Vx
-        Skip next instruction if key with the value of Vx is pressed.
-        Checks the keyboard, and if the key corresponding to the value of Vx is currently in the down position, PC is increased by 2.
+        const lastTwoBytes = opcode & 0x00ff;
+        const x = (opcode >> 8) & 0x000f;
 
-        ExA1 - SKNP Vx
-        Skip next instruction if key with the value of Vx is not pressed.
-        Checks the keyboard, and if the key corresponding to the value of Vx is currently in the up position, PC is increased by 2.
-        */
-        console.log("e");
+        switch (lastTwoBytes) {
+          case 0x9e: {
+            /*
+            Ex9E - SKP Vx
+            Skip next instruction if key with the value of Vx is pressed.
+            Checks the keyboard, and if the key corresponding to the value of Vx is currently in the down position, PC is increased by 2.
+            */
+            if (this.keysDown[this.v[x]]) {
+              this.pc += 2;
+            }
+            break;
+          }
+
+          case 0xa1: {
+            /*
+            ExA1 - SKNP Vx
+            Skip next instruction if key with the value of Vx is not pressed.
+            Checks the keyboard, and if the key corresponding to the value of Vx is currently in the up position, PC is increased by 2.
+            */
+            if (!this.keysDown[this.v[x]]) {
+              this.pc += 2;
+            }
+            break;
+          }
+        }
         break;
       }
       case 0xf000: {
-        /*
-        Fx07 - LD Vx, DT
-        Set Vx = delay timer value.
-        The value of DT is placed into Vx.
+        const lastTwoBytes = opcode & 0x00ff;
+        const x = (opcode >> 8) & 0x000f;
 
-        Fx0A - LD Vx, K
-        Wait for a key press, store the value of the key in Vx.
-        All execution stops until a key is pressed, then the value of that key is stored in Vx.
+        switch (lastTwoBytes) {
+          case 0x07: {
+            /*
+            Fx07 - LD Vx, DT
+            Set Vx = delay timer value.
+            The value of DT is placed into Vx.
+            */
+            this.v[x] = this.delayTimer;
+            break;
+          }
 
-        Fx15 - LD DT, Vx
-        Set delay timer = Vx.
-        DT is set equal to the value of Vx.
+          case 0x0a: {
+            /*
+            Fx0A - LD Vx, K
+            Wait for a key press, store the value of the key in Vx.
+            All execution stops until a key is pressed, then the value of that key is stored in Vx.
+            */
+            // Setting this flag enables the keydown handler to store next pressed key to Vx
+            this.isWaitingForKey = false;
+            break;
+          }
 
-        Fx18 - LD ST, Vx
-        Set sound timer = Vx.
-        ST is set equal to the value of Vx.
+          case 0x15: {
+            /*
+            Fx15 - LD DT, Vx
+            Set delay timer = Vx.
+            DT is set equal to the value of Vx.
+            */
+            this.delayTimer = this.v[x];
+            break;
+          }
 
-        Fx1E - ADD I, Vx
-        Set I = I + Vx.
-        The values of I and Vx are added, and the results are stored in I.
+          case 0x18: {
+            /*
+            Fx18 - LD ST, Vx
+            Set sound timer = Vx.
+            ST is set equal to the value of Vx.
+            */
+            this.soundTimer = this.v[x];
+            break;
+          }
 
-        Fx29 - LD F, Vx
-        Set I = location of sprite for digit Vx.
-        The value of I is set to the location for the hexadecimal sprite corresponding to the value of Vx. See section 2.4, Display, for more information on the Chip-8 hexadecimal font.
+          case 0x1e: {
+            /*
+            Fx1E - ADD I, Vx
+            Set I = I + Vx.
+            The values of I and Vx are added, and the results are stored in I.
+            */
+            this.i = this.i + this.v[x];
+            break;
+          }
 
-        Fx33 - LD B, Vx
-        Store BCD representation of Vx in memory locations I, I+1, and I+2.
-        The interpreter takes the decimal value of Vx, and places the hundreds digit in memory at location in I, the tens digit at location I+1, and the ones digit at location I+2.
+          case 0x29: {
+            /*
+            Fx29 - LD F, Vx
+            Set I = location of sprite for digit Vx.
+            The value of I is set to the location for the hexadecimal sprite corresponding to the value of Vx. See section 2.4, Display, for more information on the Chip-8 hexadecimal font.
+            */
+            // Multiply by number of rows per char
+            this.i = this.v[x] * 5;
+            break;
+          }
 
-        Fx55 - LD [I], Vx
-        Store registers V0 through Vx in memory starting at location I.
-        The interpreter copies the values of registers V0 through Vx into memory, starting at the address in I.
+          case 0x33: {
+            /*
+            Fx33 - LD B, Vx
+            Store BCD representation of Vx in memory locations I, I+1, and I+2.
+            The interpreter takes the decimal value of Vx, and places the hundreds digit in memory at location in I, the tens digit at location I+1, and the ones digit at location I+2.
+            */
+            const num = this.v[x];
+            const hundreds = Math.floor(num / 100);
+            const tens = parseInt((num / 10) % 10);
+            const ones = parseInt(num % 10);
+            this.memory[this.i] = hundreds;
+            this.memory[this.i + 1] = tens;
+            this.memory[this.i + 2] = ones;
+            break;
+          }
 
-        Fx65 - LD Vx, [I]
-        Read registers V0 through Vx from memory starting at location I.
-        The interpreter reads values from memory starting at location I into registers V0 through Vx.
-        */
-        console.log("f");
+          case 0x55: {
+            /*
+            Fx55 - LD [I], Vx
+            Store registers V0 through Vx in memory starting at location I.
+            The interpreter copies the values of registers V0 through Vx into memory, starting at the address in I.
+            */
+
+            for (let i = 0; i <= x; i++) {
+              this.memory[this.i + i] = this.v[i];
+            }
+            break;
+          }
+
+          case 0x65: {
+            /*
+            Fx65 - LD Vx, [I]
+            Read registers V0 through Vx from memory starting at location I.
+            The interpreter reads values from memory starting at location I into registers V0 through Vx.
+            */
+            for (let i = 0; i <= x; i++) {
+              this.v[i] = this.memory[this.i + i];
+            }
+            break;
+          }
+        }
+
         break;
       }
     }
