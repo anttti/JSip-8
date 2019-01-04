@@ -32,6 +32,7 @@ class JSip8 {
     this.executeDelayTimer = this.executeDelayTimer.bind(this);
     this.executeSoundTimer = this.executeSoundTimer.bind(this);
     this.setupKeylistener = this.setupKeylistener.bind(this);
+    this.render = this.render.bind(this);
 
     this.setupKeylistener();
   }
@@ -54,7 +55,12 @@ class JSip8 {
     this.lastCommandRun = new Date().getTime();
     this.screen = new Array(SCREEN_WIDTH * SCREEN_HEIGHT).fill(0x0);
     this.isWaitingForKey = true;
+    this.waitKeyRegister = 0x0;
     this.keysDown = {};
+    this.canvas = document.querySelector("#screen").getContext("2d");
+    this.canvasContent = new Uint8ClampedArray(
+      SCREEN_WIDTH * SCREEN_HEIGHT * 4
+    );
     console.log("Emulation state reset");
   }
 
@@ -70,7 +76,7 @@ class JSip8 {
       // All execution stops until a key is pressed, then the value of that key is stored in Vx.
       if (this.isWaitingForKey) {
         this.isWaitingForKey = false;
-        this.v[x] = keyCode;
+        this.v[this.waitKeyRegister] = keyCode;
       }
     });
 
@@ -94,6 +100,7 @@ class JSip8 {
         this.pc += 2;
       }
       this.lastCommandRun = now;
+      this.render();
     }
     requestAnimationFrame(this.run);
   }
@@ -123,6 +130,22 @@ class JSip8 {
     this.screen[location] ^= 1;
 
     return hadAlreadyAPixel;
+  }
+
+  render() {
+    this.screen.forEach((point, i) => {
+      // Map to a format suitable to push to a canvas
+      this.canvasContent[i * 4] = point * 255;
+      this.canvasContent[i * 4 + 1] = point * 255;
+      this.canvasContent[i * 4 + 2] = point * 255;
+      this.canvasContent[i * 4 + 3] = 255;
+    });
+
+    this.canvas.putImageData(
+      new ImageData(this.canvasContent, SCREEN_WIDTH),
+      0,
+      0
+    );
   }
 
   clearScreen() {
@@ -475,6 +498,7 @@ class JSip8 {
             */
             // Setting this flag enables the keydown handler to store next pressed key to Vx
             this.isWaitingForKey = false;
+            this.waitKeyRegister = x;
             break;
           }
 
